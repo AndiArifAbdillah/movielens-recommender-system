@@ -1,0 +1,20 @@
+# Dataset MovieLens - tidak diredistribusi (lisensi GroupLens)
+data/
+
+# Berkas kerja
+run_log.txt
+smoke*.py
+proto*.py
+*.npy
+*.npz
+
+# Salinan berkas submission (duplikat dari berkas di root)
+Submission_Proyek_Akhir_Sistem_Rekomendasi/
+Submission_Proyek_Akhir_Sistem_Rekomendasi.zip
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
