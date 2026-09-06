@@ -1007,7 +1007,6 @@ print(f'Rata-rata item relevan/pengguna: '
 # Padanan struktur yang sama untuk data validasi (dipakai saat penyetelan hyperparameter)
 baris_fit = train_fit.userId.map(pengguna_ke_idx).to_numpy()
 kolom_fit = train_fit.movieId.map(film_ke_idx).to_numpy()
-mask_fit = ~pd.isna(kolom_fit)
 sudah_ditonton_fit = np.zeros((N_PENGGUNA, N_FILM), dtype=bool)
 sudah_ditonton_fit[baris_fit, kolom_fit] = True
 
