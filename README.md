@@ -5,6 +5,8 @@ Perbandingan **Content-Based Filtering** dan **Collaborative Filtering** pada 10
 > Proyek Akhir kelas **Machine Learning Terapan** — Dicoding Indonesia.
 > Status: **diterima dengan penilaian bintang 5** (seluruh kriteria utama dan keenam kriteria tambahan terpenuhi).
 
+> 🎓 **Baru di sistem rekomendasi?** Repo ini dilengkapi [**Panduan Belajar**](BELAJAR.md) — kurikulum 8 tingkat dari nol sampai paham setiap barisnya, lengkap dengan latihan dan ujian mandiri. Hanya bermodal Python dasar.
+
 ---
 
 ## Ringkasan Proyek
@@ -85,6 +87,7 @@ Dugaan umum bahwa *collaborative filtering* melemah pada pengguna baru ternyata 
 ├── Proyek_Akhir_Sistem_Rekomendasi.ipynb   # Notebook lengkap (sudah dijalankan)
 ├── Proyek_Akhir_Sistem_Rekomendasi.py      # Ekspor skrip, dapat dijalankan berdiri sendiri
 ├── Laporan_Proyek_Sistem_Rekomendasi.md    # Laporan lengkap (~900 baris)
+├── BELAJAR.md                              # Panduan belajar 8 tingkat + latihan
 ├── images/                                 # 8 visualisasi yang dirujuk laporan
 ├── parts/                                  # Sumber sel notebook (dirakit build_notebook.py)
 ├── report_parts/                           # Sumber laporan
@@ -92,6 +95,8 @@ Dugaan umum bahwa *collaborative filtering* melemah pada pengguna baru ternyata 
 ```
 
 📄 **[Baca laporan lengkapnya di sini](Laporan_Proyek_Sistem_Rekomendasi.md)** — mencakup latar belakang, EDA, delapan tahap persiapan data beserta alasannya, penurunan formula tiap model, dan pembahasan metrik evaluasi.
+
+🎓 **[Panduan Belajar](BELAJAR.md)** — kalau kamu ingin benar-benar menguasai isinya, bukan sekadar membacanya. Delapan tingkat berjenjang (±30 jam), setiap konsep dijelaskan dari nol, dengan latihan yang harus dikerjakan sendiri dan ujian di tiap tingkat.
 
 ---
 
