@@ -4,6 +4,8 @@ Dokumen ini adalah kurikulum untuk membedah proyek ini dari nol sampai kamu bisa
 
 **Ditulis dengan satu asumsi:** kamu bisa Python dasar (variabel, `for`, `def`, list, dict) dan tidak lebih dari itu. Semua konsep lain — TF-IDF, faktorisasi matriks, ALS, NDCG — dijelaskan dari awal.
 
+> **Pendamping dokumen ini.** [`BEDAH_KODE.md`](BEDAH_KODE.md) menjelaskan kodenya baris demi baris. Dokumen yang kamu baca sekarang membangun **pemahaman konsep** lewat latihan; dokumen itu jadi **rujukan implementasi** saat kamu berhadapan langsung dengan kodenya. Keduanya paling enak dipakai berdampingan.
+
 > **Cara memakai dokumen ini.** Jangan dibaca sekali jalan lalu merasa paham. Rasa paham saat membaca itu menipu — otak mengenali penjelasan yang runtut dan menyangkanya sebagai pengetahuan. Yang benar-benar mengendap hanyalah yang kamu kerjakan sendiri. Setiap tingkat punya **Latihan** yang harus benar-benar diketik dan dijalankan, dan **Ujian tingkat** yang harus bisa kamu jawab dengan mulut sendiri, bukan dengan menunjuk kode.
 
 ---

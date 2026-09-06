@@ -88,6 +88,7 @@ Dugaan umum bahwa *collaborative filtering* melemah pada pengguna baru ternyata 
 ├── Proyek_Akhir_Sistem_Rekomendasi.py      # Ekspor skrip, dapat dijalankan berdiri sendiri
 ├── Laporan_Proyek_Sistem_Rekomendasi.md    # Laporan lengkap (~900 baris)
 ├── BELAJAR.md                              # Panduan belajar 8 tingkat + latihan
+├── BEDAH_KODE.md                           # Penjelasan kode baris demi baris
 ├── images/                                 # 8 visualisasi yang dirujuk laporan
 ├── parts/                                  # Sumber sel notebook (dirakit build_notebook.py)
 ├── report_parts/                           # Sumber laporan
@@ -97,6 +98,8 @@ Dugaan umum bahwa *collaborative filtering* melemah pada pengguna baru ternyata 
 📄 **[Baca laporan lengkapnya di sini](Laporan_Proyek_Sistem_Rekomendasi.md)** — mencakup latar belakang, EDA, delapan tahap persiapan data beserta alasannya, penurunan formula tiap model, dan pembahasan metrik evaluasi.
 
 🎓 **[Panduan Belajar](BELAJAR.md)** — kalau kamu ingin benar-benar menguasai isinya, bukan sekadar membacanya. Delapan tingkat berjenjang (±30 jam), setiap konsep dijelaskan dari nol, dengan latihan yang harus dikerjakan sendiri dan ujian di tiap tingkat.
+
+🔍 **[Bedah Kode](BEDAH_KODE.md)** — penjelasan baris demi baris: isi keempat berkas dataset, delapan tahap persiapan data, dan seluruh kode Content-Based Filtering. Dibuka sambil membaca kodenya.
 
 ---
 
