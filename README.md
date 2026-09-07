@@ -99,7 +99,7 @@ Dugaan umum bahwa *collaborative filtering* melemah pada pengguna baru ternyata 
 
 🎓 **[Panduan Belajar](BELAJAR.md)** — kalau kamu ingin benar-benar menguasai isinya, bukan sekadar membacanya. Delapan tingkat berjenjang (±30 jam), setiap konsep dijelaskan dari nol, dengan latihan yang harus dikerjakan sendiri dan ujian di tiap tingkat.
 
-🔍 **[Bedah Kode](BEDAH_KODE.md)** — penjelasan baris demi baris: isi keempat berkas dataset, delapan tahap persiapan data, dan seluruh kode Content-Based Filtering. Dibuka sambil membaca kodenya.
+🔍 **[Bedah Kode](BEDAH_KODE.md)** — penjelasan baris demi baris untuk **seluruh** kode proyek: keempat berkas dataset, delapan tahap persiapan data, dan keempat model (CBF, Matrix Factorization, Implicit ALS, baseline). Dibuka sambil membaca kodenya.
 
 ---
 

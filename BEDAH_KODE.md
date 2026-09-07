@@ -18,6 +18,9 @@ Gunakan dokumen ini sambil membuka kodenya berdampingan. Kalau kamu belum paham 
 - [Bagian 1 — Isi Keempat Berkas Dataset](#bagian-1--isi-keempat-berkas-dataset)
 - [Bagian 2 — Data Preparation, Delapan Tahap](#bagian-2--data-preparation-delapan-tahap)
 - [Bagian 3 — Modeling: Content-Based Filtering](#bagian-3--modeling-content-based-filtering)
+- [Bagian 4 — Modeling: Matrix Factorization (SGD)](#bagian-4--modeling-matrix-factorization-sgd)
+- [Bagian 5 — Modeling: Implicit ALS](#bagian-5--modeling-implicit-als)
+- [Bagian 6 — Baseline dan Penyajian Top-N](#bagian-6--baseline-dan-penyajian-top-n)
 
 ---
 
@@ -746,6 +749,409 @@ Seluruh model CBF terdiri dari **perkalian matriks dan pengurutan** — tidak ad
 
 ---
 
-## Berikutnya
+---
 
-Bedah kode untuk **Matrix Factorization (Bab 5.2)** dan **Implicit ALS (Bab 5.3)** belum ditulis di dokumen ini. Sementara ini, penjelasan konseptual keduanya — termasuk penurunan aturan pembaruan SGD dan solusi tertutup ALS — tersedia di [`BELAJAR.md`](BELAJAR.md) Tingkat 4 dan 5.
+# Bagian 4 — Modeling: Matrix Factorization (SGD)
+
+Sumber: [`parts/p4.py`](parts/p4.py) · Notebook: Bab 5.2
+
+Kalau CBF cuma dua perkalian matriks tanpa pelatihan, MF sebaliknya: ada parameter yang **dipelajari** lewat ribuan langkah kecil. Di sinilah kode proyek paling padat.
+
+## Persiapan sebelum perulangan
+
+```python
+def latih_mf(data_latih, n_faktor=50, reg=0.05, lr=0.01, epochs=25,
+             data_pantau=None, seed=SEED, verbose=False):
+    u_idx = data_latih.userId.map(pengguna_ke_idx).to_numpy()
+    i_idx = data_latih.movieId.map(film_ke_idx).to_numpy()
+    r = data_latih.rating.to_numpy(float)
+```
+
+Tiga baris ini menerjemahkan DataFrame jadi **tiga array NumPy sejajar**: `u_idx[t]`, `i_idx[t]`, dan `r[t]` bersama-sama menggambarkan satu rating.
+
+`.to_numpy()` di sini bukan kerapian, tapi **keputusan performa**. Perulangan di bawah berjalan 80.896 × 25 = **lebih dari dua juta kali**. Mengakses `df.iloc[t]` sebanyak dua juta kali akan memakan waktu berjam-jam; mengakses `u_idx[t]` pada array NumPy hitungan menit.
+
+## Inisialisasi — dan satu keputusan yang gampang dianggap sepele
+
+```python
+    rng = np.random.default_rng(seed)
+    P = rng.normal(0, 0.05, (N_PENGGUNA, n_faktor))
+    Q = rng.normal(0, 0.05, (N_FILM, n_faktor))
+    bu = np.zeros(N_PENGGUNA)
+    bi = np.zeros(N_FILM)
+    mu = r.mean()
+```
+
+Perhatikan ketidaksimetrisannya: **`P` dan `Q` diisi angka acak, tapi `bu` dan `bi` diisi nol.** Ini bukan kelalaian.
+
+**Kenapa `P` dan `Q` tidak boleh nol.** Kalau keduanya nol, coba telusuri satu langkah pembaruan:
+
+```
+p_u @ q_i = 0            → prediksi cuma dari bias
+P[u] += lr * (galat * q_i - reg * p_u)
+       = lr * (galat * 0  - reg * 0) = 0     ← tidak bergerak
+Q[i] += lr * (galat * p_u - reg * q_i)
+       = lr * (galat * 0  - reg * 0) = 0     ← tidak bergerak
+```
+
+Faktor latennya **terkunci nol selamanya**. Modelnya jalan tanpa error, hasilnya cuma sedikit lebih baik daripada tebakan rata-rata, dan kamu tidak akan pernah tahu kenapa. Ini disebut *symmetry breaking*: keacakan awal diperlukan supaya tiap dimensi punya titik berangkat berbeda dan bisa berkembang ke arah masing-masing.
+
+**Kenapa `bu` dan `bi` boleh nol.** Karena gradiennya tidak bergantung pada parameter lain:
+
+```
+bu[u] += lr * (galat - reg * bu[u])
+```
+
+Bahkan saat `bu[u]` nol, sukunya masih `lr * galat` yang bukan nol. Ia langsung bergerak sejak langkah pertama.
+
+Skala `0,05` dipilih kecil dengan sengaja: cukup besar untuk memecah simetri, cukup kecil supaya prediksi awal tidak melenceng jauh dan pelatihan tidak dimulai dari lubang yang dalam.
+
+**`mu` dihitung sekali dan tidak pernah diperbarui.** Ia bukan parameter yang dipelajari, melainkan titik acuan tetap. Semua yang dipelajari model adalah *simpangan* dari `mu`.
+
+## Menyiapkan data pemantau
+
+```python
+    if data_pantau is not None:
+        pantau = data_pantau[data_pantau.movieId.isin(film_ke_idx)]
+        pu_idx = pantau.userId.map(pengguna_ke_idx).to_numpy()
+        pi_idx = pantau.movieId.map(film_ke_idx).to_numpy()
+        pr = pantau.rating.to_numpy(float)
+```
+
+`data_pantau` adalah data validasi yang dievaluasi tiap epoch untuk menggambar kurva pembelajaran. Dua hal penting:
+
+- `isin(film_ke_idx)` menyaring film yang tak dikenal model. Tanpa ini, `map` menghasilkan `NaN` dan pengindeksan array akan gagal.
+- Penyiapan indeksnya **di luar perulangan epoch**. Kalau ditaruh di dalam, pekerjaan yang sama diulang 25 kali percuma.
+
+## Perulangan pelatihan
+
+```python
+    urutan = np.arange(len(r))
+    for epoch in range(1, epochs + 1):
+        rng.shuffle(urutan)
+        for t in urutan:
+```
+
+**Kenapa perlu diacak tiap epoch.** Ingat Tahap 6: `ratings` diurutkan `['userId','timestamp']`. Tanpa pengacakan, SGD akan memproses seluruh 232 rating milik pengguna 1, lalu seluruh rating pengguna 2, dan seterusnya. Akibatnya `P[0]` disetel berkali-kali berturut-turut lalu ditinggalkan sepanjang sisa epoch — pembaruannya jadi tersentak-sentak alih-alih halus.
+
+**Yang diacak adalah `urutan`, bukan datanya.** Mengacak array indeks 80.896 elemen jauh lebih murah daripada memindahkan tiga array data. Trik lazim yang layak ditiru.
+
+## Inti pembaruan — dan baris paling halus di seluruh proyek
+
+```python
+            u, i, nilai = u_idx[t], i_idx[t], r[t]
+            p_u = P[u].copy()
+            q_i = Q[i]
+            galat = nilai - (mu + bu[u] + bi[i] + p_u @ q_i)
+            bu[u] += lr * (galat - reg * bu[u])
+            bi[i] += lr * (galat - reg * bi[i])
+            P[u] += lr * (galat * q_i - reg * p_u)
+            Q[i] += lr * (galat * p_u - reg * q_i)
+```
+
+**Kenapa `P[u].copy()` tapi `Q[i]` tidak?**
+
+Ini bukan inkonsistensi — ini **wajib**, dan salah satu kekeliruan paling umum saat orang menulis MF sendiri.
+
+Di NumPy, `P[u]` mengembalikan **view**, bukan salinan: ia menunjuk ke memori yang sama dengan baris `P[u]`. Sekarang telusuri dua baris terakhir:
+
+```
+P[u] += ...     ← baris P berubah di tempat (in place)
+Q[i] += lr * (galat * p_u - reg * q_i)
+                       └──┘ butuh p_u yang LAMA
+```
+
+Matematikanya menuntut **pembaruan serentak**: `P` dan `Q` sama-sama dihitung dari nilai sebelum langkah ini. Kalau `p_u` cuma view, ia sudah ikut berubah saat `P[u]` diperbarui, sehingga baris `Q[i]` memakai nilai yang **salah** — bukan nilai lama, tapi campuran.
+
+Bug ini tidak menimbulkan error. Modelnya tetap jalan, RMSE-nya cuma sedikit lebih buruk, dan penyebabnya nyaris mustahil dilacak.
+
+Lalu kenapa `q_i` aman tanpa salinan? Karena `Q[i]` baru diubah di baris **terakhir**, dan Python menghitung ruas kanan lebih dulu sebelum menugaskan. Saat `q_i` dibaca di baris `P[u] += ...`, `Q` belum tersentuh sama sekali.
+
+Bandingkan kode itu dengan rumus di laporan:
+
+$$\mathbf{p}_u \leftarrow \mathbf{p}_u + \eta\left(e_{ui}\mathbf{q}_i - \lambda \mathbf{p}_u\right)$$
+
+Sama persis, huruf demi huruf. `lr` adalah $\eta$, `reg` adalah $\lambda$, `galat` adalah $e_{ui}$.
+
+## Evaluasi tiap akhir epoch
+
+```python
+        pred_latih = np.clip(mu + bu[u_idx] + bi[i_idx] + np.sum(P[u_idx] * Q[i_idx], axis=1), 0.5, 5.0)
+```
+
+Satu baris ini memprediksi **seluruh 80.896 rating sekaligus**, tanpa perulangan.
+
+`P[u_idx]` adalah *fancy indexing*: `u_idx` berisi 80.896 nomor pengguna, jadi hasilnya matriks 80.896 × 100 — baris ke-*t* adalah vektor laten pemilik rating ke-*t*. Begitu pula `Q[i_idx]`.
+
+**Kenapa `np.sum(A * B, axis=1)` dan bukan `A @ B.T`?** Karena kita cuma butuh perkalian titik **baris ke-t dengan baris ke-t**, bukan semua pasangan. `A @ B.T` akan menghasilkan matriks 80.896 × 80.896 — sekitar 51 GB. Perkalian elemen-per-elemen lalu dijumlahkan per baris memberi hasil yang benar dengan memori sepersekian juta kalinya.
+
+`np.clip(..., 0.5, 5.0)` memangkas prediksi ke rentang rating yang sah. Model kadang menebak 5,3 atau 0,2 — nilai yang mustahil, dan membiarkannya akan memperbesar RMSE tanpa alasan.
+
+## Prediksi untuk peringkat versus untuk RMSE
+
+Proyek ini punya **dua** fungsi keluaran yang berbeda perlakuan, dan bedanya penting.
+
+```python
+def skor_matriks_mf(model):
+    return model['mu'] + model['bu'][:, None] + model['bi'][None, :] + model['P'] @ model['Q'].T
+```
+
+`bu[:, None]` mengubah array 610 elemen jadi matriks **610 × 1**; `bi[None, :]` mengubah 8.246 elemen jadi **1 × 8.246**. Saat dijumlahkan, NumPy melakukan *broadcasting*: yang berukuran 610×1 direntangkan ke samping, yang 1×8.246 direntangkan ke bawah, hasilnya 610 × 8.246. Setiap sel `(u,i)` otomatis berisi `mu + bu[u] + bi[i]`.
+
+**Perhatikan: tidak ada `np.clip` di sini.** Disengaja. Kalau dipangkas di 5,0, semua prediksi di atas 5,0 akan **seri** — dan justru film-film itulah yang mengisi puncak daftar. Pemangkasan akan menghancurkan urutannya. Inilah sebabnya top-10 MF di laporan menampilkan angka seperti 5,2921 dan 5,2897: nilainya mustahil sebagai rating, tapi **urutannya** yang kita perlukan.
+
+```python
+def prediksi_mf(model, data):
+    u = data.userId.map(pengguna_ke_idx).to_numpy()
+    ada = data.movieId.isin(film_ke_idx).to_numpy()
+    i = data.movieId.map(film_ke_idx).fillna(0).astype(int).to_numpy()
+    penuh = model['mu'] + model['bu'][u] + model['bi'][i] + np.sum(model['P'][u] * model['Q'][i], axis=1)
+    cadangan = model['mu'] + model['bu'][u]
+    return np.clip(np.where(ada, penuh, cadangan), 0.5, 5.0)
+```
+
+Fungsi ini untuk RMSE, jadi **di sini justru dipangkas**.
+
+Yang menarik adalah penanganan *cold start*. `.fillna(0)` mengganti film tak dikenal dengan indeks 0 — bukan karena film nomor 0 relevan, tapi supaya pengindeksan array tidak gagal. Nilai `penuh` untuk baris itu memang omong kosong, tetapi `np.where(ada, penuh, cadangan)` langsung membuangnya dan memakai `cadangan` sebagai gantinya.
+
+`cadangan = mu + bu[u]` adalah tebakan terbaik ketika film tak punya riwayat: rata-rata global, disesuaikan dengan kemurahan hati pengguna itu. Inilah yang menangani 8,4% rating uji yang menyangkut film asing.
+
+## Penyetelan dan pemilihan epoch
+
+```python
+for konf in grid_mf:
+    model_uji = latih_mf(train_fit, epochs=25, data_pantau=validasi, **konf)
+    rmse_val = model_uji['riwayat'].rmse_pantau.to_numpy()
+    epoch_terbaik = int(np.argmin(rmse_val)) + 1
+```
+
+`np.argmin` memberi **posisi** nilai terkecil (mulai 0), jadi `+ 1` mengubahnya jadi nomor epoch (mulai 1).
+
+Pola ini adalah *early stopping* yang dikerjakan belakangan: model dilatih penuh 25 epoch, riwayatnya dicatat, lalu titik terbaiknya dipilih setelah semuanya selesai. Lebih boros komputasi daripada berhenti di tengah jalan, tetapi memberi kurva pembelajaran utuh yang bisa dilihat — dan untuk data sekecil ini biayanya tidak berarti.
+
+Hasil penyetelannya:
+
+| $k$ | $\lambda$ | RMSE latih | **RMSE validasi** | Epoch terbaik |
+|---|---|---|---|---|
+| **100** | **0,05** | 0,5753 | **0,8689** | 25 |
+| 50 | 0,05 | 0,6378 | 0,8755 | 24 |
+| 20 | 0,05 | 0,7134 | 0,8777 | 25 |
+| 50 | 0,10 | 0,7645 | 0,8803 | 20 |
+
+Perhatikan kolom RMSE latih: makin banyak faktor, makin kecil galat pada data latih (0,7134 → 0,5753) — model makin pandai **menghafal**. Tapi RMSE validasi cuma membaik tipis (0,8777 → 0,8689). Jarak antara 0,5753 dan 0,8689 itulah wujud *overfitting* dalam angka.
+
+## Model final dan bias yang menjelaskan segalanya
+
+```python
+model_mf = latih_mf(train_penuh, n_faktor=100, reg=0.05, lr=0.01, epochs=25)
+
+urut_bias = np.argsort(-model_mf['bi'])
+```
+
+`np.argsort(-x)` adalah cara lazim mengurutkan menurun di NumPy: `argsort` selalu menaik, jadi nilainya dinegatifkan lebih dulu. Hasilnya:
+
+| Film | Jumlah rating latih | $b_i$ |
+|---|---|---|
+| Yojimbo | 11 | 0,931 |
+| Paths of Glory | 8 | 0,905 |
+| Guess Who's Coming to Dinner | 9 | 0,880 |
+| His Girl Friday | 12 | 0,878 |
+| Lawrence of Arabia | 39 | 0,871 |
+
+**Inilah bukti langsung dari kelemahan MF.** Semua film berbias tertinggi cuma punya 8–39 rating. Regularisasi $\lambda = 0{,}05$ terpilih karena memberi RMSE validasi terbaik — tapi terlalu lemah untuk menarik film berdata sedikit kembali ke rata-rata.
+
+Telusuri akibatnya sampai ke keluaran akhir: bias tinggi → prediksi rating tinggi → mengisi puncak daftar → Precision@10 ambruk ke 0,0232, kalah dari baseline populer (0,0563).
+
+Rantai sebabnya lengkap dan bisa ditunjuk baris kodenya:
+
+```
+fungsi objektif menjumlahkan pada rating TERAMATI saja
+        │
+        ▼
+lambda kecil terasa optimal bagi RMSE — tak ada yang menghukumnya
+        │
+        ▼
+b_i film berdata sedikit melambung  ← tabel di atas
+        │
+        ▼
+top-10 dipenuhi klasik lawas        ← Sunset Blvd., High Noon, dst.
+        │
+        ▼
+NDCG@10 = 0,0278 — kalah dari daftar film populer
+```
+
+---
+
+# Bagian 5 — Modeling: Implicit ALS
+
+Sumber: [`parts/p5.py`](parts/p5.py) · Notebook: Bab 5.3
+
+## Membangun matriks interaksi biner
+
+```python
+def latih_ials(data_latih, n_faktor=32, reg=2.0, alpha=10.0, iterasi=15,
+               ambang=AMBANG_SUKA, seed=SEED):
+    positif = data_latih[data_latih.rating >= ambang]
+    C = sp.csr_matrix((np.ones(len(positif)),
+                       (positif.userId.map(pengguna_ke_idx), positif.movieId.map(film_ke_idx))),
+                      shape=(N_PENGGUNA, N_FILM))
+    C_pengguna, C_film = C.tocsr(), C.tocsc()
+```
+
+Perhatikan `np.ones(len(positif))` — **nilai ratingnya dibuang**. Rating 4,0 dan 5,0 sama-sama jadi 1. Inilah perbedaan mendasar dengan MF: iALS tidak peduli seberapa suka, cuma peduli **suka atau tidak**.
+
+**Baris `tocsr()` dan `tocsc()` layak diperhatikan.** Matriks yang sama disimpan dalam dua orientasi:
+
+| Format | Menyimpan | Cepat untuk |
+|---|---|---|
+| **CSR** (*Compressed Sparse Row*) | per baris | "film apa saja yang disukai pengguna u" |
+| **CSC** (*Compressed Sparse Column*) | per kolom | "siapa saja yang menyukai film i" |
+
+ALS bergantian menyapu pengguna lalu film, jadi ia butuh **kedua** arah. Menyimpan dua salinan memakan memori dua kali lipat (tetap cuma 0,6 MB) tapi menghemat waktu berlipat-lipat — kalau cuma punya CSR, mencari "siapa menyukai film i" harus menyisir seluruh matriks.
+
+## Inisialisasi
+
+```python
+    rng = np.random.default_rng(seed)
+    X = rng.normal(0, 0.01, (N_PENGGUNA, n_faktor))
+    Y = rng.normal(0, 0.01, (N_FILM, n_faktor))
+    I_reg = reg * np.eye(n_faktor)
+```
+
+Sama seperti MF, keacakan awal memecah simetri. Tapi **tidak ada `bu` dan `bi`** di sini — iALS tidak memakai suku bias sama sekali, karena yang diprediksi bukan nilai rating melainkan skor preferensi tak berskala.
+
+`I_reg` adalah matriks identitas dikali $\lambda$, dihitung **sekali di luar semua perulangan**. Ia dipakai ribuan kali di dalam; menghitungnya ulang tiap kali adalah pemborosan murni.
+
+## Jantung ALS
+
+```python
+    for _ in range(iterasi):
+        YtY = Y.T @ Y + I_reg
+        for u in range(N_PENGGUNA):
+            item = C_pengguna.indices[C_pengguna.indptr[u]:C_pengguna.indptr[u + 1]]
+            if len(item) == 0:
+                X[u] = 0
+                continue
+            Yi = Y[item]
+            A = YtY + alpha * (Yi.T @ Yi)
+            b = (1 + alpha) * Yi.sum(axis=0)
+            X[u] = np.linalg.solve(A, b)
+```
+
+**Baris `item = ...`** adalah pembacaan langsung struktur CSR yang dibahas di Bagian 2: `indptr[u]` sampai `indptr[u+1]` menandai potongan milik baris `u`, dan `indices` di rentang itu berisi nomor kolomnya. Diterjemahkan: **"daftar film yang disukai pengguna u"**.
+
+**Kenapa `YtY` di luar perulangan pengguna.** Rumusnya:
+
+$$\mathbf{x}_u = \left(Y^{\top}C^u Y + \lambda I\right)^{-1} Y^{\top} C^u \mathbf{p}(u)$$
+
+Karena $c_{ui} = 1 + \alpha$ untuk yang teramati dan $1$ untuk sisanya, matriks $C^u$ bisa dipecah jadi "identitas untuk semua, ditambah $\alpha$ untuk yang teramati saja":
+
+$$Y^{\top}C^u Y = \underbrace{Y^{\top}Y}_{\text{sama untuk semua pengguna}} + \alpha \underbrace{Y_u^{\top}Y_u}_{\text{hanya film yang disukai}}$$
+
+Suku pertama tidak bergantung pada `u` sama sekali — makanya dihitung **satu kali** untuk seluruh 610 pengguna. Suku kedua cuma melibatkan puluhan film, bukan 8.246.
+
+Tanpa pemecahan ini, tiap pengguna butuh perkalian matriks 8.246 × 32 — 610 kali per iterasi, 15 iterasi. Dengan pemecahan ini, satu iterasi selesai dalam sepersekian detik.
+
+Kode `A = YtY + alpha * (Yi.T @ Yi)` adalah terjemahan harfiah persamaan di atas. Begitu pula `b = (1 + alpha) * Yi.sum(axis=0)`, yang merupakan $Y^{\top}C^u\mathbf{p}(u)$ — karena $p_{ui}$ bernilai 1 hanya pada film yang disukai, jumlahnya menyusut jadi "jumlahkan vektor film yang disukai, kali $(1+\alpha)$".
+
+**`np.linalg.solve(A, b)` dan bukan `np.linalg.inv(A) @ b`.** Keduanya menjawab pertanyaan yang sama, tapi `solve` menyelesaikan sistem persamaan secara langsung tanpa pernah membentuk matriks inversnya. Lebih cepat, dan yang lebih penting, **lebih stabil secara numerik** — menghitung invers memperbesar galat pembulatan, terutama saat matriksnya nyaris singular. Ini kaidah umum yang layak dibawa ke mana pun: kalau yang kamu butuhkan adalah $A^{-1}b$, pakai `solve`, jangan `inv`.
+
+**`if len(item) == 0: X[u] = 0`** menangani pengguna yang tak pernah memberi rating ≥ 4. Tanpa penjagaan ini, `A` menjadi $\lambda I$ dan `b` menjadi nol — `solve` tetap berhasil dan mengembalikan nol juga, tapi memanggilnya cuma buang waktu. Penjagaan ini juga membuat maksudnya tersurat: **pengguna ini memang tidak punya profil.**
+
+## Paruh kedua: peran ditukar
+
+```python
+        XtX = X.T @ X + I_reg
+        for i in range(N_FILM):
+            pengguna = C_film.indices[C_film.indptr[i]:C_film.indptr[i + 1]]
+            if len(pengguna) == 0:
+                Y[i] = 0
+                continue
+            Xu = X[pengguna]
+            A = XtX + alpha * (Xu.T @ Xu)
+            b = (1 + alpha) * Xu.sum(axis=0)
+            Y[i] = np.linalg.solve(A, b)
+```
+
+Blok ini **cermin persis** dari blok sebelumnya — `Y` ditukar `X`, pengguna ditukar film, CSR ditukar CSC. Itulah arti *alternating*: bekukan satu sisi, selesaikan sisi lain secara tertutup, lalu tukar.
+
+Perhatikan `X` yang dipakai di sini adalah `X` yang **baru saja diperbarui** di paruh pertama, bukan salinan lama. Berbeda dengan MF yang menuntut pembaruan serentak, ALS memang dirancang berurutan — tiap paruh menyelesaikan submasalahnya secara optimal terhadap keadaan sisi lain saat ini.
+
+## Perbandingan langsung: MF versus iALS
+
+| Aspek | Matrix Factorization | Implicit ALS |
+|---|---|---|
+| Masukan | Nilai rating 0,5–5,0 | Biner: suka (≥4) atau tidak |
+| Pasangan yang dipelajari | Hanya yang teramati | **Seluruh 5 juta pasangan** |
+| Optimasi | SGD, dua juta langkah kecil | ALS, 15 iterasi solusi tertutup |
+| Suku bias | Ada ($\mu, b_u, b_i$) | Tidak ada |
+| Keluaran | Taksiran rating | Skor preferensi tak berskala |
+| Dievaluasi dengan | RMSE, MAE | Precision, Recall, NDCG |
+| $k$ terpilih | 100 | **16** |
+| Baris kode inti | 8 baris pembaruan | 8 baris solusi tertutup |
+
+**Kenapa $k$ iALS jauh lebih kecil?** Dari tabel penyetelan, $k=64$ justru lebih buruk (NDCG 0,1031) daripada $k=16$ (0,1231). Dua sebabnya: menyusun peringkat "suka/tidak suka" butuh representasi lebih ringkas daripada menebak angka presisi, dan dengan cuma 610 pengguna, model besar cepat kehilangan daya generalisasi.
+
+---
+
+# Bagian 6 — Baseline dan Penyajian Top-N
+
+## Baseline popularitas
+
+```python
+skor_pop = np.tile(jumlah_rating_film.astype(float), (N_PENGGUNA, 1))
+```
+
+Satu baris. `np.tile` menyalin array 8.246 elemen sebanyak 610 kali ke bawah, menghasilkan matriks 610 × 8.246 yang **setiap barisnya identik**.
+
+Itulah definisi "tidak dipersonalisasi" dalam bentuk kode: skor film sama persis untuk semua orang. Bentuk matriksnya sengaja dibuat sama dengan model lain supaya bisa masuk ke fungsi evaluasi yang sama tanpa perlakuan khusus — perbandingannya jadi benar-benar setara.
+
+## Menyajikan top-N
+
+```python
+def rekomendasi_topn(skor, idx_pengguna, top_n=10, kandidat=None, sudah=None, nama_kolom='skor'):
+    kandidat = pool if kandidat is None else kandidat
+    sudah = sudah_ditonton if sudah is None else sudah
+
+    s = np.full(N_FILM, -np.inf)
+    s[kandidat] = skor[idx_pengguna, kandidat].astype(float)
+    s[sudah[idx_pengguna]] = -np.inf
+    urutan = np.lexsort((-jumlah_rating_film, -s))[:top_n]
+```
+
+**Pola `-np.inf` sebagai penyaring.** Alih-alih menyalin skor lalu membuang yang tidak memenuhi syarat, kodenya mulai dari array yang **seluruhnya minus tak hingga**, lalu mengisi hanya posisi yang boleh direkomendasikan.
+
+Kenapa `-np.inf` dan bukan `-1` seperti di Mode A? Karena di sini skornya bisa datang dari model mana pun, dan skalanya berbeda-beda jauh: skor MF melampaui 5,3, skor CBF tak pernah lebih dari 1, skor popularitas berupa cacahan hingga ratusan. Tak ada satu angka "cukup kecil" yang aman untuk semuanya. `-np.inf` dijamin kalah dari bilangan apa pun.
+
+Dua penyaringan berurutan:
+1. `s[kandidat] = ...` — hanya film di *candidate pool* yang dapat skor sungguhan
+2. `s[sudah[idx_pengguna]] = -np.inf` — film yang sudah ditonton dikembalikan ke minus tak hingga
+
+Urutannya penting: penyaringan kedua harus **setelah** yang pertama, kalau tidak film yang sudah ditonton akan tertimpa skornya lagi.
+
+`np.lexsort` muncul lagi dengan aturan yang sama seperti Mode A: **kunci terakhir adalah kunci utama**, jadi urut menurut skor lalu popularitas sebagai pemecah seri.
+
+```python
+    hasil['relevan?'] = ['YA' if i in relevan_uji.get(idx_pengguna, set()) else '-' for i in urutan]
+```
+
+`.get(idx_pengguna, set())` memakai nilai bawaan himpunan kosong — supaya pengguna yang tak punya item relevan pada data uji tidak menyebabkan `KeyError`, melainkan menghasilkan sepuluh tanda `-`.
+
+Kolom inilah yang membuat keluaran top-N di laporan **bisa dinilai**, bukan sekadar dipandang. Tanpa penanda ini, keempat daftar akan terlihat sama masuk akalnya — padahal iALS menghasilkan empat `YA` sementara CBF dan MF nol.
+
+---
+
+# Penutup
+
+Seluruh model di proyek ini, diringkas dalam satu tabel:
+
+| Model | Inti perhitungan | Ada pelatihan? | Deterministik? |
+|---|---|---|---|
+| Popularitas | `np.tile` dari jumlah rating | Tidak | Ya |
+| CBF | Dua perkalian matriks | Tidak | Ya |
+| MF | 2 juta langkah SGD | Ya | Ya, berkat `SEED` |
+| iALS | 15 iterasi solusi tertutup | Ya | Ya, berkat `SEED` |
+
+Yang menarik: model paling sederhana secara kode (popularitas, satu baris) mengalahkan dua model yang jauh lebih rumit. Dan model pemenang (iALS) bukan yang paling banyak parameternya — $k=16$, seperenam dari MF.
+
+Kalau ada satu pelajaran yang dibawa pulang dari membaca seluruh kode ini: **kerumitan bukan jaminan apa-apa.** Yang menentukan adalah apakah yang dioptimalkan model benar-benar hal yang kamu pedulikan.
